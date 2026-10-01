@@ -552,7 +552,9 @@ export class MouseService implements IMouseService {
       if (this._mouseStateService.isDefaultEncoding) {
         this._coreService.triggerBinaryEvent(report);
       } else {
-        this._coreService.triggerDataEvent(report, true);
+        // Only reports caused by a button (press/release/drag/wheel) count as user input; hover
+        // (motion with no button) must not scroll to bottom or clear the selection.
+        this._coreService.triggerDataEvent(report, e.button !== CoreMouseButton.NONE);
       }
     }
 
