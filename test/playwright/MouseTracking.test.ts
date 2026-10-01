@@ -3,6 +3,7 @@
  * @license MIT
  */
 import { test } from '@playwright/test';
+import { deepStrictEqual } from 'assert';
 import { createTestContext, ITestContext, openTerminal, pollFor } from './TestUtils';
 
 let ctx: ITestContext;
@@ -1429,4 +1430,150 @@ test.describe('Mouse Tracking Tests', () => {
    * currently not possible due to a limitation of the playwright mouse interface
    * (saves only the last one pressed)
    */
+
+  /**
+   * Right-click opt-out (mouseReportRightClick) and hover vs. user input.
+   */
+  test.describe('mouseReportRightClick and hover', () => {
+    async function setRightClickOption(value: boolean): Promise<void> {
+      await ctx.page.evaluate(`window.term.options.mouseReportRightClick = ${value};`);
+    }
+    async function recordContextMenu(): Promise<void> {
+      // bubble-phase listener on window runs after the terminal's own handlers
+      await ctx.page.evaluate(`
+        window.ctxMenus = [];
+        window.ctxMenuListener = e => window.ctxMenus.push({ defaultPrevented: e.defaultPrevented });
+        window.addEventListener('contextmenu', window.ctxMenuListener);
+      `);
+    }
+    async function viewportInfo(): Promise<{ viewportY: number, baseY: number, hasSelection: boolean }> {
+      return await ctx.page.evaluate(`({
+        viewportY: window.term.buffer.active.viewportY,
+        baseY: window.term.buffer.active.baseY,
+        hasSelection: window.term.hasSelection()
+      })`) as any;
+    }
+    async function fillAndScrollUp(): Promise<void> {
+      let data = '';
+      for (let i = 0; i < 200; i++) {
+        data += `line ${i}\r\n`;
+      }
+      await ctx.proxy.write(data);
+      await ctx.page.evaluate(`window.term.scrollLines(-30);`);
+      await ctx.proxy.select(0, 10, 4);
+    }
+
+    test.afterEach(async () => {
+      await setRightClickOption(true);
+      await ctx.page.evaluate(`
+        if (window.ctxMenuListener) { window.removeEventListener('contextmenu', window.ctxMenuListener); window.ctxMenuListener = undefined; }
+        window.term.clearSelection();
+        window.term.scrollToBottom();
+      `);
+      await resetMouseModes();
+    });
+
+    test('right click is not reported and contextmenu not prevented when mouseReportRightClick=false', async () => {
+      if (ctx.browser.browserType().name() === 'webkit') {
+        test.skip();
+        return;
+      }
+      const encoding = 'SGR';
+      await resetMouseModes();
+      await mouseMove(10, 10);
+      await ctx.proxy.write('\x1b[?1000h\x1b[?1006h');
+      await setRightClickOption(false);
+      await getReports(encoding);
+      await recordContextMenu();
+      await mouseDown('right');
+      await mouseUp('right');
+      // the native contextmenu event must reach the page, not cancelled
+      await pollFor(ctx.page, `window.ctxMenus.length > 0`, true);
+      await pollFor(ctx.page, `window.ctxMenus.some(m => m.defaultPrevented)`, false);
+      // no report for the right button (read once: getReports() clears the list,
+      // so polling for [] would pass spuriously on the retry)
+      deepStrictEqual(await getReports(encoding), []);
+      // left click is still reported
+      await mouseDown('left');
+      await mouseUp('left');
+      await pollFor(ctx.page, () => getReports(encoding), [
+        { col: 11, row: 11, state: { action: 'press', button: 'left', modifier: { control: false, shift: false, meta: false } } },
+        { col: 11, row: 11, state: { action: 'release', button: 'left', modifier: { control: false, shift: false, meta: false } } }
+      ]);
+    });
+
+    test('right click is still reported with default mouseReportRightClick', async () => {
+      if (ctx.browser.browserType().name() === 'webkit') {
+        test.skip();
+        return;
+      }
+      const encoding = 'SGR';
+      await resetMouseModes();
+      await mouseMove(10, 10);
+      await ctx.proxy.write('\x1b[?1000h\x1b[?1006h');
+      await setRightClickOption(true);
+      await getReports(encoding);
+      await mouseDown('right');
+      await mouseUp('right');
+      await pollFor(ctx.page, () => getReports(encoding), [
+        { col: 11, row: 11, state: { action: 'press', button: 'right', modifier: { control: false, shift: false, meta: false } } },
+        { col: 11, row: 11, state: { action: 'release', button: 'right', modifier: { control: false, shift: false, meta: false } } }
+      ]);
+    });
+
+    test('hover is reported but does not scroll to bottom or clear selection', async () => {
+      if (ctx.browser.browserType().name() === 'webkit') {
+        test.skip();
+        return;
+      }
+      const encoding = 'SGR';
+      await resetMouseModes();
+      // enable tracking first: turning mouse modes on disables (and clears) the
+      // selection service, term.select() afterwards still creates a selection
+      await ctx.proxy.write('\x1b[?1003h\x1b[?1006h');
+      await fillAndScrollUp();
+      const before = await viewportInfo();
+      if (before.viewportY === before.baseY || !before.hasSelection) {
+        throw new Error(`precondition failed: ${JSON.stringify(before)}`);
+      }
+      await getReports(encoding);
+      await mouseMove(20, 20);
+      await mouseMove(21, 20);
+      await pollFor(ctx.page, () => getReports(encoding), [
+        { col: 21, row: 21, state: { action: 'move', button: '<none>', modifier: { control: false, shift: false, meta: false } } },
+        { col: 22, row: 21, state: { action: 'move', button: '<none>', modifier: { control: false, shift: false, meta: false } } }
+      ]);
+      const after = await viewportInfo();
+      if (after.viewportY !== before.viewportY) {
+        throw new Error(`viewport scrolled on hover: ${before.viewportY} -> ${after.viewportY} (baseY ${after.baseY})`);
+      }
+      if (!after.hasSelection) {
+        throw new Error('selection was cleared by hover');
+      }
+    });
+
+    test('regression: left click still scrolls to bottom (user input)', async () => {
+      if (ctx.browser.browserType().name() === 'webkit') {
+        test.skip();
+        return;
+      }
+      const encoding = 'SGR';
+      await resetMouseModes();
+      await fillAndScrollUp();
+      const before = await viewportInfo();
+      if (before.viewportY === before.baseY) {
+        throw new Error(`precondition failed: ${JSON.stringify(before)}`);
+      }
+      await ctx.proxy.write('\x1b[?1000h\x1b[?1006h');
+      await mouseMove(20, 20);
+      await getReports(encoding);
+      await mouseDown('left');
+      await mouseUp('left');
+      await pollFor(ctx.page, () => getReports(encoding), [
+        { col: 21, row: 21, state: { action: 'press', button: 'left', modifier: { control: false, shift: false, meta: false } } },
+        { col: 21, row: 21, state: { action: 'release', button: 'left', modifier: { control: false, shift: false, meta: false } } }
+      ]);
+      await pollFor(ctx.page, `window.term.buffer.active.viewportY === window.term.buffer.active.baseY`, true);
+    });
+  });
 });

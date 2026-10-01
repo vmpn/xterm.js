@@ -444,3 +444,128 @@ describe('MouseService multi-window', () => {
     assert.deepEqual(openDocument.removed, []);
   });
 });
+
+describe('MouseService mouse reports and user input', () => {
+  let mouseStateService: MouseStateService;
+  let dataEvents: { data: string, wasUserInput: boolean | undefined }[];
+  let options: any;
+
+  function createService(): MouseService {
+    return new MouseService(
+      new MockRenderService(),
+      { getMouseReportCoords: () => ({ col: 0, row: 0, x: 0, y: 0 }) } as any,
+      mouseStateService,
+      {
+        triggerDataEvent: (data: string, wasUserInput?: boolean) => dataEvents.push({ data, wasUserInput }),
+        triggerBinaryEvent: () => {},
+        decPrivateModes: { applicationCursorKeys: false }
+      } as any,
+      bufferService,
+      { rawOptions: options } as any,
+      new TestSelectionService(),
+      logService,
+      new MockCoreBrowserService()
+    );
+  }
+
+  function createCtx(): any {
+    return {
+      target: {
+        element: { ...createTestMouseTargetElement(), ownerDocument: { addEventListener: () => {}, removeEventListener: () => {} } },
+        screenElement: createTestMouseTargetElement(),
+        document: { addEventListener: () => {}, removeEventListener: () => {} }
+      },
+      focus: () => {},
+      requestedEvents: {},
+      mouseupListener: { clear: () => {} },
+      mousedragListener: { clear: () => {} }
+    };
+  }
+
+  function fakeEvent(type: string, button: number, buttons: number): MouseEvent & { prevented: boolean } {
+    const ev: any = { type, button, buttons, altKey: false, ctrlKey: false, shiftKey: false, prevented: false };
+    ev.preventDefault = () => { ev.prevented = true; };
+    ev.stopPropagation = () => {};
+    return ev;
+  }
+
+  beforeEach(() => {
+    dataEvents = [];
+    options = { logLevel: 'info', fastScrollSensitivity: 1, scrollSensitivity: 1 };
+    mouseStateService = new MouseStateService();
+    mouseStateService.activeProtocol = 'ANY';
+    mouseStateService.activeEncoding = 'SGR';
+  });
+
+  describe('wasUserInput', () => {
+    it('hover (motion without a button) is reported but not user input', () => {
+      const service: any = createService();
+      assert.isTrue(service._sendEvent(createCtx(), fakeEvent('mousemove', 0, 0)));
+      assert.deepEqual(dataEvents, [{ data: '\x1b[<35;1;1M', wasUserInput: false }]);
+    });
+    it('button press counts as user input', () => {
+      const service: any = createService();
+      assert.isTrue(service._sendEvent(createCtx(), fakeEvent('mousedown', 0, 1)));
+      assert.deepEqual(dataEvents, [{ data: '\x1b[<0;1;1M', wasUserInput: true }]);
+    });
+    it('button release counts as user input', () => {
+      const service: any = createService();
+      assert.isTrue(service._sendEvent(createCtx(), fakeEvent('mouseup', 0, 0)));
+      assert.deepEqual(dataEvents, [{ data: '\x1b[<0;1;1m', wasUserInput: true }]);
+    });
+    it('drag (motion with a button held) counts as user input', () => {
+      const service: any = createService();
+      assert.isTrue(service._sendEvent(createCtx(), fakeEvent('mousemove', 0, 1)));
+      assert.deepEqual(dataEvents, [{ data: '\x1b[<32;1;1M', wasUserInput: true }]);
+    });
+  });
+
+  describe('mouseReportRightClick', () => {
+    it('default (undefined/true): right press is reported and default prevented', () => {
+      const service: any = createService();
+      const ev = fakeEvent('mousedown', 2, 2);
+      service._handleMouseDown(createCtx(), ev);
+      assert.deepEqual(dataEvents.map(e => e.data), ['\x1b[<2;1;1M']);
+      assert.isTrue(ev.prevented);
+    });
+    it('false: right press is not reported and default is not prevented', () => {
+      options.mouseReportRightClick = false;
+      const service: any = createService();
+      const ev = fakeEvent('mousedown', 2, 2);
+      service._handleMouseDown(createCtx(), ev);
+      assert.deepEqual(dataEvents, []);
+      assert.isFalse(ev.prevented);
+    });
+    it('false: middle press is not reported either', () => {
+      options.mouseReportRightClick = false;
+      const service: any = createService();
+      const ev = fakeEvent('mousedown', 1, 4);
+      service._handleMouseDown(createCtx(), ev);
+      assert.deepEqual(dataEvents, []);
+      assert.isFalse(ev.prevented);
+    });
+    it('false: right release is not reported', () => {
+      options.mouseReportRightClick = false;
+      const service: any = createService();
+      service._handleMouseUp(createCtx(), fakeEvent('mouseup', 2, 0));
+      assert.deepEqual(dataEvents, []);
+    });
+    it('false: left press is still reported and default prevented', () => {
+      options.mouseReportRightClick = false;
+      const service: any = createService();
+      const ev = fakeEvent('mousedown', 0, 1);
+      service._handleMouseDown(createCtx(), ev);
+      assert.deepEqual(dataEvents.map(e => e.data), ['\x1b[<0;1;1M']);
+      assert.isTrue(ev.prevented);
+    });
+    it('false: right press with mouse events inactive keeps existing behavior (default prevented)', () => {
+      options.mouseReportRightClick = false;
+      mouseStateService.activeProtocol = 'NONE';
+      const service: any = createService();
+      const ev = fakeEvent('mousedown', 2, 2);
+      service._handleMouseDown(createCtx(), ev);
+      assert.deepEqual(dataEvents, []);
+      assert.isTrue(ev.prevented);
+    });
+  });
+});
