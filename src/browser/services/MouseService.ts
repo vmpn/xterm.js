@@ -192,7 +192,9 @@ export class MouseService implements IMouseService {
   }
 
   private _handleMouseUp(ctx: IMouseBindContext, ev: MouseEvent): void {
-    this._sendEvent(ctx, ev);
+    if (!this._shouldIgnoreNonPrimaryButton(ev)) {
+      this._sendEvent(ctx, ev);
+    }
     if (!ev.buttons) {
       // if no other button is held remove global handlers
       ctx.mouseupListener.clear();
@@ -221,7 +223,22 @@ export class MouseService implements IMouseService {
     }
   }
 
+  /**
+   * Whether a non-primary button event should be left to the browser (native context menu etc.)
+   * instead of being reported to the application, see `mouseReportRightClick`.
+   */
+  private _shouldIgnoreNonPrimaryButton(ev: MouseEvent): boolean {
+    return this._optionsService.rawOptions.mouseReportRightClick === false
+      && ev.button !== 0
+      && this._mouseStateService.areMouseEventsActive;
+  }
+
   private _handleMouseDown(ctx: IMouseBindContext, ev: MouseEvent): void {
+    // Leave non-primary buttons to the browser (no report, no cancel) when opted out. This must
+    // happen before preventDefault so the native context menu can show.
+    if (this._shouldIgnoreNonPrimaryButton(ev) && !this._selectionService.shouldForceSelection(ev)) {
+      return;
+    }
     ev.preventDefault();
     ctx.focus();
 

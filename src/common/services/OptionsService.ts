@@ -42,6 +42,7 @@ export const DEFAULT_OPTIONS: Readonly<Required<ITerminalOptions>> = {
   macOptionClickForcesSelection: false,
   minimumContrastRatio: 1,
   mouseEventsRequireAlt: false,
+  mouseReportRightClick: true,
   disableStdin: false,
   allowProposedApi: false,
   allowTransparency: false,

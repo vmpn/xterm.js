@@ -148,6 +148,15 @@ declare module '@xterm/headless' {
     mouseEventsRequireAlt?: boolean;
 
     /**
+     * Whether non-primary mouse buttons (right and middle click) are reported
+     * to the application while mouse events are active. When `false`, they
+     * are not reported and their default action is not prevented, so the
+     * browser's native context menu appears on right click. Left button and
+     * wheel events are unaffected. Defaults to `true`.
+     */
+    mouseReportRightClick?: boolean;
+
+    /**
      * Whether to reflow the line containing the cursor when the terminal is
      * resized. Defaults to false, because shells usually handle this
      * themselves. Note that this will not move the cursor position, only the

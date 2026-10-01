@@ -218,6 +218,15 @@ declare module '@xterm/xterm' {
     mouseEventsRequireAlt?: boolean;
 
     /**
+     * Whether non-primary mouse buttons (right and middle click) are reported
+     * to the application while mouse events are active. When `false`, they
+     * are not reported and their default action is not prevented, so the
+     * browser's native context menu appears on right click. Left button and
+     * wheel events are unaffected. Defaults to `true`.
+     */
+    mouseReportRightClick?: boolean;
+
+    /**
      * Control various quirks features that are either non-standard or standard
      * in but generally rejected in modern terminals.
      */
